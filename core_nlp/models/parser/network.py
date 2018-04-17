@@ -12,11 +12,29 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 
 from core_nlp.inference.parser import Parser
-from core_nlp.models.parser.encoder import BILSTMEncoder
 from core_nlp.utils.global_names import GlobalNames
 
-torch.manual_seed(1)
+torch.manual_seed(123)
 
+
+class Encoder(nn.Module):
+    def __init__(self, input_dim, hidden_dim , output_dim , dropout_layer):
+        super(Encoder, self).__init__()
+        self.lstm_units = hidden_dim
+        self.dropout = dropout_layer
+        self.lstm_layer1 = nn.LSTM(input_dim, hidden_dim,bidirectional=True)
+        self.lstm_layer2 = nn.LSTM(2 * hidden_dim, output_dim,bidirectional=True)
+
+    def forward(self,embs,test=False):
+        state_layer1 = self.lstm_layer1(embs)[0]
+        fw_layer1, bw_layer1 = torch.split(state_layer1, self.lstm_units, 2)
+        if not test:
+            state_layer1 = self.dropout(state_layer1)
+        state_layer2 = self.lstm_layer2(state_layer1)[0]
+        fw_layer2, bw_layer2 = torch.split(state_layer2,self.lstm_units,2)
+        fw = torch.cat([fw_layer1, fw_layer2], 2)
+        bw = torch.cat([bw_layer1, bw_layer2], 2)
+        return torch.squeeze(fw),torch.squeeze(bw)
 
 class Network(nn.Module):
     def __init__(self,
@@ -24,20 +42,12 @@ class Network(nn.Module):
                  args,
                  ):
         super(Network, self).__init__()
+        self.args = args
         self.word_emb = nn.Embedding(fm.total_words(), args.word_dims)
         self.tag_emb = nn.Embedding(fm.total_tags(), args.tag_dims)
-
-        single_span = 4 * args.lstm_units
-
-        self.encoder = BILSTMEncoder(
-            input_dim=args.word_dims + args.tag_dims,
-            hidden_dim=args.lstm_units,
-            output_dim=args.lstm_units,
-            droprate=args.droprate
-        )
-
         self.drop = nn.Dropout(args.droprate)
-
+        single_span = 4 * args.lstm_units
+        self.encoder = Encoder(args.word_dims + args.tag_dims,args.lstm_units,args.lstm_units,self.drop)
         self.struct_nn = nn.Sequential(
             nn.Linear(4 * single_span, args.hidden_units),
             nn.ReLU(),
@@ -49,20 +59,18 @@ class Network(nn.Module):
             nn.ReLU(),
             nn.Linear(args.hidden_units, fm.total_label_actions())
         )
-        if GlobalNames.use_gpu:
-            self.cuda()
+        self.init_params(fm)
 
-    def init_weight(self):
-        """
-        Init the all the parameter of model, including:
-            Embedding
-            Linear W
-            Linear B
-        """
-        pass
+    def init_params(self,fm):
+        for p in self.parameters():
+            #print(p.size())
+            if len(p.size()) == 0 or p.size()[0] == fm.total_label_actions() or p.size()[0] == 2:
+                p.data.zero_()
+            else:
+                p.data.uniform_(-0.01, 0.01)
 
     def prepare_sequence(self, seq):
-        tensor = torch.LongTensor(seq)
+        tensor = torch.unsqueeze(torch.LongTensor(seq),1)
         if GlobalNames.use_gpu:
             return Variable(tensor).cuda()
         else:
@@ -82,7 +90,7 @@ class Network(nn.Module):
         hidden_input = torch.cat([fwd_span_vec, back_span_vec], dim=-1)
         if not test:
             hidden_input = self.drop(hidden_input)
-
+        hidden_input = torch.unsqueeze(hidden_input,0)
         if eval_type == 'struct':
             return self.struct_nn(hidden_input)[0]
         else:
@@ -98,7 +106,7 @@ class Network(nn.Module):
 
     def encode(self, word_ids, tag_ids, test=False):
         inputs = self.lookup(word_ids, tag_ids)
-        return self.encoder(inputs, test)
+        return self.encoder(inputs,test)
 
     def _explore(self, data, fm, alpha=1.0, beta=0):
         struct_data = {}
@@ -245,6 +253,7 @@ class Network(nn.Module):
                 action_index = 1 + np.argmax(scores[1:])
             action = fm.l_action(action_index)
             state.take_action(action)
+
         tree = state.stack[0][2][0]
         tree.propagate_sentence(sentence)
         return tree
@@ -275,7 +284,7 @@ class Network(nn.Module):
             fwd, back = self.encode(example['w'], example['t'])
             for (left, right), correct in example['struct_data'].items():
                 scores = self.evaluate_action(fwd, back, left, right, 'struct')
-                probs = F.softmax(scores, dim=0)
+                probs = F.softmax(scores,dim=0)
                 loss = -torch.log(probs[correct])
                 if this_loss is not None:
                     this_loss += loss
@@ -284,7 +293,7 @@ class Network(nn.Module):
 
             for (left, right), correct in example['label_data'].items():
                 scores = self.evaluate_action(fwd, back, left, right, 'label')
-                probs = F.softmax(scores, dim=0)
+                probs = F.softmax(scores,dim=0)
                 loss = -torch.log(probs[correct])
                 this_loss += loss
             return this_loss, example

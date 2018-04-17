@@ -203,8 +203,8 @@ class FeatureMapper(object):
             for (w, t) in sentence
         ]
 
-        w = np.array(words).astype('int32')
-        t = np.array(tags).astype('int32')
+        w = np.array(words).astype('int64')
+        t = np.array(tags).astype('int64')
 
         return w, t
 

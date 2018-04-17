@@ -12,7 +12,7 @@ from __future__ import print_function
 from collections import defaultdict
 
 from core_nlp.utils.measures import FScore
-
+import pygraphviz as pgv
 
 class PhraseTree(object):
     puncs = [",", ".", ":", "``", "''", "PU"]  # (COLLINS.prm)
@@ -283,3 +283,36 @@ class PhraseTree(object):
                 break
 
         return result
+
+    def rotate_tree(self):
+        if self.leaf:
+            return
+        for child in self.children:
+            child.rotate_tree()
+        self.children = self.children[::-1]
+
+
+    def draw_tree(self,outfile = 'tree.png'):
+        def helper(root,A,idx):
+            if root.leaf:
+                p = '{}:{}'.format(self.sentence[root.leaf][0],idx)
+                idx += 1
+            else:
+                p = '{}:{}'.format(root.symbol,idx)
+                idx += 1
+                A.add_node(p)
+                for child in root.children:
+                    q,idx = helper(child, A ,idx)
+                    if not child.leaf is None:
+                        A.add_node(q,color='blue')
+                    else:
+                        A.add_node(q)
+                    A.add_edge(p, q)
+            return p,idx
+        A = pgv.AGraph(directed=True,strict=True)
+        helper(self, A, 0)
+        for node in A.nodes():
+            node = node.name.split(":")[0]
+        A.graph_attr['epsilon']='0.001'
+        A.layout('dot') # layout with dot
+        A.draw(outfile) # write to file

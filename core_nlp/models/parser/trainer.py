@@ -55,9 +55,10 @@ def train(fm, args):
     start_time = time.time()
 
     network = Network(fm, args)
-    optimizer = optimize.Adadelta(network.parameters(), eps=1e-7, rho=0.99)
 
-    # network.cuda()
+    optimizer = optimize.Adadelta(network.parameters(), eps=1e-7, rho=0.99)
+    if GlobalNames.use_gpu:
+        network.cuda()
 
     training_data = fm.gold_data_from_file(train_data_file)
     num_batches = -(-len(training_data) // batch_size)
